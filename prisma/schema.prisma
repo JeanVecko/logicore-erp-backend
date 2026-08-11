@@ -1,0 +1,850 @@
+// LogiCore ERP — schéma Prisma
+// Dev : SQLite (provider "sqlite"). Prod : PostgreSQL.
+// Pour migrer vers PostgreSQL : changer provider = "postgresql" ci-dessous,
+// pointer DATABASE_URL vers une URL Postgres, puis `npx prisma migrate dev`.
+// NB: pas d'`enum` Prisma ici volontairement — le connecteur SQLite ne les supporte pas ;
+// les valeurs contrôlées (statuts, codes de rôle...) sont validées côté DTO (class-validator).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Multi-tenant ────────────────────────────────────────────────────────────
+
+model Company {
+  id           String   @id @default(cuid())
+  name         String
+  legalName    String?
+  taxId        String?
+  email        String?
+  phone        String?
+  address      String?
+  /// Logo de l'entreprise, stocké en base64 (data URI) — redimensionné/compressé côté client
+  /// avant envoi (voir src/utils/imageUpload.js côté frontend), pas de fichier sur disque.
+  logoUrl      String?
+  baseCurrency String   @default("FC")
+  timezone     String   @default("Africa/Douala")
+  /// LOGISTICS | LOGISTICS_SALES — conditionne l'accès au module Vente (frontend ET backend,
+  /// voir AccountTypeGuard). Choisi à l'inscription, modifiable ensuite par un Super Admin
+  /// via PATCH /companies/:id (pas besoin de recréer l'organisation).
+  accountType  String   @default("LOGISTICS")
+  /// Autorise la validation d'une vente à faire passer un stock sous zéro. Désactivé par défaut :
+  /// une vente est alors bloquée si le stock disponible est insuffisant (voir SalesService.validate).
+  allowNegativeStock Boolean @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  warehouses     Warehouse[]
+  users          User[]
+  auditLogs      AuditLog[]
+  categories     Category[]
+  productTypes   ProductType[]
+  products       Product[]
+  inventories    Inventory[]
+  stockMovements StockMovement[]
+  purchaseOrders  PurchaseOrder[]
+  purchaseOrderSendLogs PurchaseOrderSendLog[]
+  notifications   Notification[]
+  inventoryCounts InventoryCount[]
+  suppliers       Supplier[]
+  vehicles        Vehicle[]
+  assets          Asset[]
+  maintenanceRecords MaintenanceRecord[]
+  inventoryCampaigns InventoryCampaign[]
+  customers       Customer[]
+  sales           Sale[]
+  quotes          Quote[]
+  deliveryNotes   DeliveryNote[]
+  invoices        Invoice[]
+  payments        Payment[]
+  invitations     Invitation[]
+
+  @@map("companies")
+}
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  code      String
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users               User[]
+  inventories         Inventory[]
+  stockMovements      StockMovement[] @relation("StockMovementWarehouse")
+  incomingTransfers   StockMovement[] @relation("StockMovementTargetWarehouse")
+  purchaseOrders      PurchaseOrder[]
+  inventoryCountLines InventoryCountLine[]
+  vehicles            Vehicle[]
+  assets              Asset[]
+  inventoryCampaigns  InventoryCampaign[]
+  sales               Sale[]
+  invitations         Invitation[]
+
+  @@unique([companyId, code])
+  @@map("warehouses")
+}
+
+model Currency {
+  id                 String   @id @default(cuid())
+  code               String   @unique
+  name               String
+  symbol             String
+  exchangeRateToBase Float    @default(1)
+  isBase             Boolean  @default(false)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("currencies")
+}
+
+// ─── Catalogue produits ───────────────────────────────────────────────────────
+
+model Category {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  /// Code court unique par entreprise (ex: ELE, PLO) — premier segment de la référence
+  /// auto-générée des articles : CODE_CATEGORIE-CODE_TYPE-NNN.
+  code        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products Product[]
+  types    ProductType[]
+
+  @@unique([companyId, name])
+  @@unique([companyId, code])
+  @@map("categories")
+}
+
+/// Sous-classification d'une catégorie (ex: "Ordinateur" sous "Informatique") — porte son propre
+/// code court et son propre compteur séquentiel. Combiné au code de sa catégorie, il forme la
+/// référence d'article : CODE_CATEGORIE-CODE_TYPE-NNN (le compteur est donc déjà indépendant par
+/// combinaison catégorie+type, puisqu'un type n'appartient qu'à une seule catégorie).
+model ProductType {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name        String
+  /// Code court unique au sein de la catégorie (ex: ORD, IMP, CLA).
+  code        String
+  /// Prochain numéro de séquence à attribuer pour ce type (référence = ...-NNN).
+  /// Incrémenté atomiquement (UPDATE ... SET nextProductSeq = nextProductSeq + 1) pour rester
+  /// correct sous concurrence, sans verrou applicatif ni risque de doublon.
+  nextProductSeq Int   @default(1)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products Product[]
+
+  @@unique([companyId, categoryId, name])
+  @@unique([companyId, categoryId, code])
+  @@map("product_types")
+}
+
+model Product {
+  id            String       @id @default(cuid())
+  companyId     String
+  company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  categoryId    String
+  category      Category     @relation(fields: [categoryId], references: [id])
+  /// Nullable uniquement pour les articles créés avant l'introduction des types (référence
+  /// figée à leur ancien format) — tout nouvel article doit obligatoirement en avoir un
+  /// (imposé par CreateProductDto, pas par la contrainte de colonne).
+  typeId        String?
+  type          ProductType? @relation(fields: [typeId], references: [id])
+  sku           String
+  name          String
+  description   String?
+  unit          String
+  purchasePrice Float    @default(0)
+  sellingPrice  Float    @default(0)
+  currencyCode  String   @default("FC")
+  reorderPoint  Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  inventories        Inventory[]
+  stockMovements     StockMovement[]
+  purchaseOrderLines PurchaseOrderLine[]
+  inventoryCountLines InventoryCountLine[]
+  saleLines          SaleLine[]
+  quoteLines         QuoteLine[]
+
+  @@unique([companyId, sku])
+  @@map("products")
+}
+
+// ─── Stock ────────────────────────────────────────────────────────────────────
+
+/// Solde de stock courant par (produit, entrepôt) — matérialisé et tenu à jour
+/// à chaque StockMovement, pour éviter un SUM() coûteux à chaque lecture.
+model Inventory {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  quantity    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([productId, warehouseId])
+  @@map("inventories")
+}
+
+/// Journal immuable des mouvements de stock. type: ENTRY | EXIT | TRANSFER | ADJUSTMENT.
+/// `quantity` est le delta signé réellement appliqué (négatif pour une sortie).
+model StockMovement {
+  id                String     @id @default(cuid())
+  companyId         String
+  company           Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product    @relation(fields: [productId], references: [id])
+  warehouseId       String
+  warehouse         Warehouse  @relation("StockMovementWarehouse", fields: [warehouseId], references: [id])
+  targetWarehouseId String?
+  targetWarehouse   Warehouse? @relation("StockMovementTargetWarehouse", fields: [targetWarehouseId], references: [id])
+  type              String
+  quantity          Int
+  reference         String?
+  notes             String?
+  performedById     String?
+  performedBy       User?      @relation(fields: [performedById], references: [id], onDelete: SetNull)
+  createdAt         DateTime   @default(now())
+
+  @@map("stock_movements")
+}
+
+/// Relevé d'inventaire généré automatiquement (J-7 avant fin de mois) ou manuellement.
+/// Immuable par construction : aucune route PATCH/DELETE n'existe pour ce modèle — une fois
+/// généré, il sert de référence figée pour comparer le comptage physique au stock système.
+model InventoryCount {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ref         String
+  periodKey   String // "2026-08" — une seule génération par entreprise et par mois
+  periodLabel String // "Août 2026"
+  generatedAt DateTime @default(now())
+  triggeredBy String // AUTO | MANUAL
+
+  lines InventoryCountLine[]
+
+  @@unique([companyId, periodKey])
+  @@map("inventory_counts")
+}
+
+model InventoryCountLine {
+  id               String         @id @default(cuid())
+  inventoryCountId String
+  inventoryCount   InventoryCount @relation(fields: [inventoryCountId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product        @relation(fields: [productId], references: [id])
+  warehouseId      String
+  warehouse        Warehouse      @relation(fields: [warehouseId], references: [id])
+  openingStock     Int // stock initial : quantité au 1er du mois, recalculée depuis le journal des mouvements
+  currentStock     Int // stock actuel : quantité au moment de la génération
+
+  @@map("inventory_count_lines")
+}
+
+/// Campagne de comptage physique (planification/suivi) — distincte d'InventoryCount : ici l'objet
+/// est mutable (statut, progression, écarts saisis au fil de l'eau) et supprimable, alors
+/// qu'InventoryCount est un instantané figé généré automatiquement. status : Planifié | En cours |
+/// Écarts à valider | Clôturé.
+model InventoryCampaign {
+  id            String    @id @default(cuid())
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouseId   String
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  ref           String
+  type          String // Général | Tournant | Ciblé
+  status        String    @default("Planifié")
+  articlesCount Int       @default(0)
+  countedCount  Int       @default(0)
+  ecartsCount   Int       @default(0)
+  responsable   String?
+  scheduledDate DateTime
+  createdById   String?
+  createdBy     User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([companyId, ref])
+  @@map("inventory_campaigns")
+}
+
+// ─── Achats ──────────────────────────────────────────────────────────────────
+
+model Supplier {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name        String
+  contactName String?
+  email       String?
+  phone       String?
+  address     String?
+  category    String?
+  notes       String?
+  rating      Float    @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([companyId, name])
+  @@map("suppliers")
+}
+
+/// Bon de commande. `supplierName` est un instantané du nom du fournisseur au moment de la
+/// création (utile même si le fournisseur est renommé/désactivé ensuite) ; `supplierId` relie
+/// désormais le bon à un vrai enregistrement Supplier — obligatoire pour les bons créés
+/// manuellement (workflow BROUILLON→...→ENVOYÉ), toujours absent pour les bons générés
+/// automatiquement depuis les alertes de seuil (créés directement en ISSUED, flux inchangé).
+/// status : DRAFT | PENDING_VALIDATION | VALIDATED | SENT_TO_SUPPLIER | ISSUED | RECEIVED.
+model PurchaseOrder {
+  id                 String    @id @default(cuid())
+  companyId          String
+  company            Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouseId        String
+  warehouse          Warehouse @relation(fields: [warehouseId], references: [id])
+  supplierId         String?
+  supplier           Supplier? @relation(fields: [supplierId], references: [id])
+  ref                String
+  supplierName       String?
+  status             String // DRAFT | PENDING_VALIDATION | VALIDATED | SENT_TO_SUPPLIER | ISSUED | RECEIVED
+  totalAmount        Float     @default(0)
+  /// Texte libre affiché dans le PDF envoyé au fournisseur (paiement, délais de livraison...).
+  purchaseConditions String?
+  observations       String?
+  issuedAt           DateTime?
+  receivedAt         DateTime?
+  validatedById      String?
+  validatedBy        User?     @relation("PurchaseOrderValidatedBy", fields: [validatedById], references: [id], onDelete: SetNull)
+  validatedAt        DateTime?
+  /// Date du dernier envoi réussi au fournisseur (un renvoi la met à jour).
+  sentAt             DateTime?
+  createdById        String?
+  createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  lines    PurchaseOrderLine[]
+  sendLogs PurchaseOrderSendLog[]
+
+  @@unique([companyId, ref])
+  @@map("purchase_orders")
+}
+
+/// Historique des tentatives d'envoi du bon de commande par e-mail au fournisseur — table dédiée
+/// (plutôt que le seul AuditLog générique) pour exposer un vrai écran d'historique par bon
+/// (destinataire, statut, erreur) sans parser du JSON libre. Chaque tentative est aussi
+/// journalisée via AuditService.record() pour rester cohérent avec le reste de l'app.
+model PurchaseOrderSendLog {
+  id              String        @id @default(cuid())
+  companyId       String
+  company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  recipientEmail  String
+  subject         String
+  status          String // SUCCESS | FAILED
+  errorMessage    String?
+  sentById        String?
+  sentBy          User?         @relation(fields: [sentById], references: [id], onDelete: SetNull)
+  sentAt          DateTime      @default(now())
+
+  @@map("purchase_order_send_logs")
+}
+
+model PurchaseOrderLine {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  quantity        Int
+  unitPrice       Float
+
+  @@map("purchase_order_lines")
+}
+
+// ─── Ventes ──────────────────────────────────────────────────────────────────
+// Réservé aux entreprises avec Company.accountType = "LOGISTICS_SALES" (voir AccountTypeGuard).
+
+model Customer {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  email     String?
+  phone     String?
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sales    Sale[]
+  quotes   Quote[]
+  invoices Invoice[]
+
+  @@map("customers")
+}
+
+/// status : DRAFT (créée, sans effet sur le stock) | VALIDATED (mouvements de stock EXIT générés,
+/// irréversible dans cette version) | CANCELLED (uniquement possible depuis DRAFT).
+model Sale {
+  id             String    @id @default(cuid())
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  /// Nullable : une vente peut être créée pour un client "au comptoir" sans fiche Customer
+  /// (voir customerName). Renseigné uniquement si un vrai client a été sélectionné.
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  /// Nom du client au moment de la vente — toujours renseigné, que la vente soit liée à un
+  /// vrai Customer (nom recopié) ou saisie librement (aucune fiche Customer créée).
+  customerName   String
+  warehouseId    String
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  ref            String
+  status         String    @default("DRAFT")
+  totalAmount    Float     @default(0)
+  saleDate       DateTime  @default(now())
+  /// Renseigné si cette vente provient de la conversion d'un devis accepté (traçabilité seulement).
+  sourceQuoteId  String?
+  notes          String?
+  createdById    String?
+  createdBy      User?     @relation("SaleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  validatedById  String?
+  validatedBy    User?     @relation("SaleValidatedBy", fields: [validatedById], references: [id], onDelete: SetNull)
+  validatedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  lines        SaleLine[]
+  deliveryNote DeliveryNote?
+  invoice      Invoice?
+
+  @@unique([companyId, ref])
+  @@map("sales")
+}
+
+model SaleLine {
+  id        String   @id @default(cuid())
+  saleId    String
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Float
+  /// Remise en montant fixe (pas un pourcentage) soustraite du sous-total de la ligne.
+  discount  Float    @default(0)
+
+  @@map("sale_lines")
+}
+
+/// status : DRAFT | SENT | ACCEPTED | REJECTED | CONVERTED (une fois transformé en vente, figé).
+model Quote {
+  id              String    @id @default(cuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customerId      String
+  customer        Customer  @relation(fields: [customerId], references: [id])
+  ref             String
+  status          String    @default("DRAFT")
+  totalAmount     Float     @default(0)
+  validUntil      DateTime?
+  /// Renseigné une fois converti en vente (POST /quotes/:id/convert) — le devis reste consultable
+  /// mais son statut passe à CONVERTED et ne peut plus être modifié.
+  convertedSaleId String?
+  createdById     String?
+  createdBy       User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  lines QuoteLine[]
+
+  @@unique([companyId, ref])
+  @@map("quotes")
+}
+
+model QuoteLine {
+  id        String  @id @default(cuid())
+  quoteId   String
+  quote     Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Float
+  discount  Float   @default(0)
+
+  @@map("quote_lines")
+}
+
+/// Un seul bon de livraison par vente dans cette version (pas de livraison partielle).
+/// status : PREPARING | SHIPPED | DELIVERED.
+model DeliveryNote {
+  id          String    @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId      String    @unique
+  sale        Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  ref         String
+  status      String    @default("PREPARING")
+  deliveredAt DateTime?
+  createdById String?
+  createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([companyId, ref])
+  @@map("delivery_notes")
+}
+
+/// Une seule facture par vente dans cette version. status : UNPAID | PARTIALLY_PAID | PAID,
+/// dérivé automatiquement de amountPaid par PaymentsService à chaque paiement enregistré.
+model Invoice {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId      String   @unique
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  /// Nullable : voir Sale.customerId — même principe, une facture peut être émise pour un
+  /// client "au comptoir" sans fiche Customer.
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  /// Nom du client au moment de la facturation — recopié depuis Sale.customerName.
+  customerName String
+  ref         String
+  status      String   @default("UNPAID")
+  totalAmount Float    @default(0)
+  amountPaid  Float    @default(0)
+  dueDate     DateTime?
+  issuedAt    DateTime @default(now())
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  payments Payment[]
+
+  @@unique([companyId, ref])
+  @@map("invoices")
+}
+
+model Payment {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoiceId    String
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount       Float
+  method       String // CASH | BANK_TRANSFER | MOBILE_MONEY | CHECK | OTHER
+  reference    String?
+  paidAt       DateTime @default(now())
+  receivedById String?
+  receivedBy   User?    @relation(fields: [receivedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@map("payments")
+}
+
+// ─── Parc automobile ──────────────────────────────────────────────────────────
+
+/// status : état opérationnel du véhicule, indépendant de `insuranceExpiry` — un véhicule
+/// peut être ACTIVE avec une assurance expirée (alerte calculée côté service/UI à partir de la date),
+/// ou MAINTENANCE sans lien avec l'assurance. Les deux informations ne doivent pas être fusionnées.
+model Vehicle {
+  id              String    @id @default(cuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouseId     String?
+  warehouse       Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  plate           String
+  vehicleType     String
+  brand           String?
+  model           String?
+  driverName      String?
+  mileage         Int       @default(0)
+  fuelType        String?
+  status          String    @default("ACTIVE") // ACTIVE | MAINTENANCE | OUT_OF_SERVICE
+  insuranceExpiry DateTime?
+  notes           String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  maintenanceRecords MaintenanceRecord[]
+
+  @@unique([companyId, plate])
+  @@map("vehicles")
+}
+
+// ─── Équipements ──────────────────────────────────────────────────────────────
+
+/// Équipements hors parc automobile : groupes électrogènes, chariots élévateurs,
+/// compresseurs, outillage... Même logique de statut que Vehicle (indépendant
+/// de toute autre information, calculé nulle part ailleurs).
+model Asset {
+  id              String     @id @default(cuid())
+  companyId       String
+  company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouseId     String?
+  warehouse       Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  name            String
+  assetType       String
+  brand           String?
+  model           String?
+  serialNumber    String?
+  status          String     @default("ACTIVE") // ACTIVE | MAINTENANCE | OUT_OF_SERVICE
+  acquisitionDate DateTime?
+  purchaseValue   Float?
+  notes           String?
+  isActive        Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  maintenanceRecords MaintenanceRecord[]
+
+  @@unique([companyId, serialNumber])
+  @@map("assets")
+}
+
+// ─── Maintenance ──────────────────────────────────────────────────────────────
+
+/// Intervention de maintenance rattachée à EXACTEMENT un véhicule OU un équipement
+/// (jamais les deux, jamais aucun — validé côté service). status : PLANNED | IN_PROGRESS | DONE.
+model MaintenanceRecord {
+  id                String    @id @default(cuid())
+  companyId         String
+  company           Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vehicleId         String?
+  vehicle           Vehicle?  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  assetId           String?
+  asset             Asset?    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  interventionType  String // PREVENTIVE | CURATIVE
+  status            String    @default("PLANNED") // PLANNED | IN_PROGRESS | DONE
+  description       String
+  scheduledDate     DateTime
+  completedDate     DateTime?
+  cost              Float?
+  performedBy       String?
+  notes             String?
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@map("maintenance_records")
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+/// userId = null → notification visible par toute l'entreprise (ex: alerte de stock).
+model Notification {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
+
+// ─── RBAC ────────────────────────────────────────────────────────────────────
+
+model Permission {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  module      String
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// Catalogue de rôles global (partagé par toutes les entreprises) — pas de scoping par tenant.
+model Role {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  users       User[]
+  invitations Invitation[]
+
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ─── Utilisateurs & Auth ─────────────────────────────────────────────────────
+
+model User {
+  id              String     @id @default(cuid())
+  companyId       String
+  company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouseId     String?
+  warehouse       Warehouse? @relation(fields: [warehouseId], references: [id])
+  roleId          String
+  role            Role       @relation(fields: [roleId], references: [id])
+  email           String     @unique
+  passwordHash    String
+  firstName       String
+  lastName        String
+  phone           String?
+  isActive        Boolean    @default(true)
+  isEmailVerified Boolean    @default(false)
+  lastLoginAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  refreshTokens           RefreshToken[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  auditLogs               AuditLog[]
+  stockMovements          StockMovement[]
+  purchaseOrders          PurchaseOrder[]
+  validatedPurchaseOrders PurchaseOrder[] @relation("PurchaseOrderValidatedBy")
+  purchaseOrderSendLogs   PurchaseOrderSendLog[]
+  notifications           Notification[]
+  inventoryCampaigns      InventoryCampaign[]
+  createdSales            Sale[]         @relation("SaleCreatedBy")
+  validatedSales          Sale[]         @relation("SaleValidatedBy")
+  createdQuotes           Quote[]
+  createdDeliveryNotes    DeliveryNote[]
+  createdInvoices         Invoice[]
+  receivedPayments        Payment[]
+  sentInvitations         Invitation[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  userAgent String?
+  ipAddress String?
+  revoked   Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  used      Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  used      Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("email_verification_tokens")
+}
+
+/// Invitation d'un utilisateur par un Admin, par e-mail. Même famille que PasswordResetToken/
+/// EmailVerificationToken : seul le hash SHA-256 du token brut est stocké, le brut n'existe
+/// qu'une fois, dans le lien envoyé par e-mail. companyId/roleId/warehouseId sont figés à
+/// l'invitation et repris tels quels à l'acceptation (jamais depuis le corps de la requête publique
+/// d'acceptation) — même principe anti-tampering que companyId sur POST /users.
+/// status : PENDING | ACCEPTED | REVOKED. "Expirée" n'est pas stocké : dérivé de expiresAt à la volée.
+model Invitation {
+  id          String     @id @default(cuid())
+  companyId   String
+  company     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  email       String
+  roleId      String
+  role        Role       @relation(fields: [roleId], references: [id])
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  tokenHash   String     @unique
+  status      String     @default("PENDING")
+  invitedById String?
+  invitedBy   User?      @relation(fields: [invitedById], references: [id], onDelete: SetNull)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@map("invitations")
+}
+
+// ─── Audit ───────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String?
+  entityId  String?
+  metadata  String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@map("audit_logs")
+}

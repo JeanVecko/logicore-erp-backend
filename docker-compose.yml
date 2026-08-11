@@ -1,0 +1,40 @@
+# Pile de déploiement type production (PostgreSQL).
+# En développement, l'API tourne en local avec SQLite (`npm run start:dev`) — ce compose
+# sert à tester/déployer le chemin PostgreSQL (voir prisma/schema.prisma : provider "postgresql").
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: logicore
+      POSTGRES_PASSWORD: logicore
+      POSTGRES_DB: logicore_erp
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_PREFIX: api/v1
+      DATABASE_URL: postgresql://logicore:logicore@postgres:5432/logicore_erp?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_REFRESH_EXPIRES_IN: 7d
+      CORS_ORIGIN: ${CORS_ORIGIN}
+
+volumes:
+  postgres_data:
