@@ -88,7 +88,7 @@ export default (): AppConfig => ({
     smtpSecure: process.env.SMTP_SECURE === 'true',
     smtpUser: process.env.SMTP_USER || undefined,
     smtpPass: process.env.SMTP_PASS || undefined,
-    fromAddress: process.env.EMAIL_FROM_ADDRESS ?? 'no-reply@logicore.local',
-    fromName: process.env.EMAIL_FROM_NAME ?? 'LogiCore ERP',
+    fromAddress: process.env.EMAIL_FROM_ADDRESS ?? 'no-reply@snadarpe.local',
+    fromName: process.env.EMAIL_FROM_NAME ?? 'SNADARPE ERP',
   },
 });

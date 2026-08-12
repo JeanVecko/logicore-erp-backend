@@ -51,8 +51,8 @@ async function bootstrap() {
 
   // ── Swagger ───────────────────────────────────────────────────────────
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('LogiCore ERP API')
-    .setDescription("API REST de LogiCore ERP — gestion logistique multi-entreprises, multi-entrepôts, multi-devises.")
+    .setTitle('SNADARPE ERP API')
+    .setDescription("API REST de SNADARPE ERP — gestion logistique multi-entreprises, multi-entrepôts, multi-devises.")
     .setVersion('1.0')
     .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'access-token')
     .build();
@@ -63,7 +63,7 @@ async function bootstrap() {
 
   await app.listen(port);
   // eslint-disable-next-line no-console
-  console.log(`🚀 LogiCore ERP API démarrée sur http://localhost:${port}/${apiPrefix}`);
+  console.log(`🚀 SNADARPE ERP API démarrée sur http://localhost:${port}/${apiPrefix}`);
   // eslint-disable-next-line no-console
   console.log(`📚 Swagger disponible sur http://localhost:${port}/docs`);
 }

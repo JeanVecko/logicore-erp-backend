@@ -13,7 +13,7 @@ export const winstonLoggerOptions: winston.LoggerOptions = {
         : winston.format.combine(
             winston.format.timestamp(),
             winston.format.ms(),
-            nestWinstonModuleUtilities.format.nestLike('LogiCoreAPI', { prettyPrint: true, colors: true }),
+            nestWinstonModuleUtilities.format.nestLike('SnadarpeAPI', { prettyPrint: true, colors: true }),
           ),
     }),
     new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),

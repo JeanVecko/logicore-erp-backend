@@ -68,7 +68,7 @@ export class AiService {
       : "Aucun article sous le seuil de réapprovisionnement actuellement.";
 
     return [
-      `Tu es l'assistant intégré à LogiCore ERP pour l'entreprise "${context.companyName}".`,
+      `Tu es l'assistant intégré à SNADARPE ERP pour l'entreprise "${context.companyName}".`,
       `Tu réponds en français, de façon concise et professionnelle.`,
       `Tu peux répondre à des questions sur l'état des stocks/dépôts en t'appuyant sur les données ci-dessous, et aider à rédiger des documents (courriers, rapports, comptes-rendus).`,
       `Ne fabrique pas de données chiffrées qui ne figurent pas dans le contexte fourni.`,

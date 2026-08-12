@@ -165,9 +165,9 @@ export class InvitationsService {
     // depuis l'UI si l'e-mail n'est pas arrivé — l'invitation créée reste la trace de l'action.
     await this.emailService.send({
       to: invitation.email,
-      subject: `Invitation à rejoindre ${invitation.company.name} sur LogiCore ERP`,
+      subject: `Invitation à rejoindre ${invitation.company.name} sur SNADARPE ERP`,
       text:
-        `Vous avez été invité(e) à rejoindre ${invitation.company.name} sur LogiCore ERP en tant que ${invitation.role.name}.\n\n` +
+        `Vous avez été invité(e) à rejoindre ${invitation.company.name} sur SNADARPE ERP en tant que ${invitation.role.name}.\n\n` +
         `Pour créer votre compte, cliquez sur ce lien (valable ${hours} heures) :\n${link}\n\n` +
         `Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet e-mail.`,
     });
