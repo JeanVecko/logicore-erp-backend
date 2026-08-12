@@ -82,11 +82,15 @@ export class UsersService {
     return this.toDto(user);
   }
 
-  async update(id: string, companyId: string, dto: UpdateUserDto): Promise<UserResponseDto> {
+  async update(id: string, companyId: string, dto: UpdateUserDto, currentUserId: string): Promise<UserResponseDto> {
     await this.findById(id, companyId);
 
     if (dto.roleCode === ROLE_CODES.SUPER_ADMIN) {
       throw new ForbiddenException('Le rôle Super Admin ne peut pas être attribué via cette mise à jour.');
+    }
+
+    if (dto.isActive === false && id === currentUserId) {
+      throw new ForbiddenException('Vous ne pouvez pas désactiver votre propre compte.');
     }
 
     let roleConnect = {};
@@ -107,10 +111,25 @@ export class UsersService {
     return this.toDto(user);
   }
 
-  async deactivate(id: string, companyId: string): Promise<UserResponseDto> {
+  async deactivate(id: string, companyId: string, currentUserId: string): Promise<UserResponseDto> {
+    if (id === currentUserId) {
+      throw new ForbiddenException('Vous ne pouvez pas désactiver votre propre compte.');
+    }
     await this.findById(id, companyId);
     const user = await this.repository.deactivate(id);
     return this.toDto(user);
+  }
+
+  async hardDelete(id: string, companyId: string, currentUserId: string): Promise<{ id: string }> {
+    if (id === currentUserId) {
+      throw new ForbiddenException('Vous ne pouvez pas supprimer votre propre compte.');
+    }
+    const user = await this.findById(id, companyId);
+    if (user.isActive) {
+      throw new ForbiddenException('Seul un compte désactivé peut être supprimé définitivement.');
+    }
+    await this.repository.hardDelete(id);
+    return { id };
   }
 
   private toDto(user: UserWithRole): UserResponseDto {

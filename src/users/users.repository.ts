@@ -36,4 +36,8 @@ export class UsersRepository {
   deactivate(id: string): Promise<UserWithRole> {
     return this.prisma.user.update({ where: { id }, data: { isActive: false }, include: userWithRole });
   }
+
+  hardDelete(id: string): Promise<UserWithRole> {
+    return this.prisma.user.delete({ where: { id }, include: userWithRole });
+  }
 }
