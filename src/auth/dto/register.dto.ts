@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEmail, IsIn, IsNotEmpty, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
+/// Indicatif pays (+237, +33...) suivi du numéro, sans espace — ex: +237690000000.
+const PHONE_REGEX = /^\+\d{6,15}$/;
+
 const LOGO_DATA_URI_REGEX = /^data:image\/(png|jpe?g|webp);base64,/;
 
 export class RegisterDto {
@@ -31,6 +34,11 @@ export class RegisterDto {
   @ApiProperty({ example: 'jean.vecko@logicore.com' })
   @IsEmail()
   email: string;
+
+  @ApiProperty({ example: '+237690000000', description: "Indicatif pays + numéro, sans espace" })
+  @IsString()
+  @Matches(PHONE_REGEX, { message: 'Numéro de téléphone invalide — sélectionnez un pays et saisissez uniquement des chiffres.' })
+  phone: string;
 
   @ApiProperty({ example: 'S3cur3P@ssword!', minLength: 8 })
   @IsString()

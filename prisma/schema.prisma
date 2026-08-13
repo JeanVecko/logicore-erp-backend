@@ -1,16 +1,14 @@
-// LogiCore ERP — schéma Prisma
-// Dev : SQLite (provider "sqlite"). Prod : PostgreSQL.
-// Pour migrer vers PostgreSQL : changer provider = "postgresql" ci-dessous,
-// pointer DATABASE_URL vers une URL Postgres, puis `npx prisma migrate dev`.
-// NB: pas d'`enum` Prisma ici volontairement — le connecteur SQLite ne les supporte pas ;
-// les valeurs contrôlées (statuts, codes de rôle...) sont validées côté DTO (class-validator).
+// SNADARPE ERP — schéma Prisma
+// PostgreSQL (dev et prod).
+// NB: pas d'`enum` Prisma ici — historique du connecteur SQLite qui ne les supportait pas ;
+// les valeurs contrôlées (statuts, codes de rôle...) restent validées côté DTO (class-validator).
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -747,6 +745,7 @@ model User {
   refreshTokens           RefreshToken[]
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
+  loginVerificationCodes  LoginVerificationCode[]
   auditLogs               AuditLog[]
   stockMovements          StockMovement[]
   purchaseOrders          PurchaseOrder[]
@@ -801,6 +800,21 @@ model EmailVerificationToken {
   createdAt DateTime @default(now())
 
   @@map("email_verification_tokens")
+}
+
+/// Code à 6 chiffres envoyé par e-mail comme second facteur après vérification du mot de passe
+/// (voir AuthService.login/verifyLoginCode) — même famille que les autres tokens à usage unique,
+/// mais numérique et à courte durée de vie puisque saisi manuellement par l'utilisateur.
+model LoginVerificationCode {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  used      Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("login_verification_codes")
 }
 
 /// Invitation d'un utilisateur par un Admin, par e-mail. Même famille que PasswordResetToken/

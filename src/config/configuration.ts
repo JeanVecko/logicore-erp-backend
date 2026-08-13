@@ -19,6 +19,7 @@ export interface AppConfig {
     passwordResetExpiresInMinutes: number;
     emailVerificationExpiresInHours: number;
     invitationExpiresInHours: number;
+    loginCodeExpiresInMinutes: number;
   };
   frontendUrl: string;
   seed: {
@@ -67,6 +68,7 @@ export default (): AppConfig => ({
     passwordResetExpiresInMinutes: parseInt(process.env.PASSWORD_RESET_EXPIRES_IN_MINUTES ?? '30', 10),
     emailVerificationExpiresInHours: parseInt(process.env.EMAIL_VERIFICATION_EXPIRES_IN_HOURS ?? '24', 10),
     invitationExpiresInHours: parseInt(process.env.INVITATION_EXPIRES_IN_HOURS ?? '72', 10),
+    loginCodeExpiresInMinutes: parseInt(process.env.LOGIN_CODE_EXPIRES_IN_MINUTES ?? '10', 10),
   },
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173',
   seed: {

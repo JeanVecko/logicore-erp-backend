@@ -17,3 +17,11 @@ export class AuthResponseDto {
   @ApiProperty() refreshToken: string;
   @ApiProperty({ type: AuthUserDto }) user: AuthUserDto;
 }
+
+/** Réponse de POST /auth/login : les identifiants sont valides, un code de connexion a été
+ * envoyé par e-mail — aucun jeton n'est émis avant vérification de ce code (POST /auth/login/verify-code). */
+export class LoginChallengeDto {
+  @ApiProperty({ example: true }) requiresVerification: true;
+  @ApiProperty() email: string;
+  @ApiProperty() message: string;
+}

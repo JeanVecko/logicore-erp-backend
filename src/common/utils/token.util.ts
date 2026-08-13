@@ -9,3 +9,10 @@ export function generateToken(bytes = 32): string {
 export function hashToken(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
+
+/** Code numérique (ex: connexion par e-mail) — tiré via randomBytes, pas Math.random(). */
+export function generateNumericCode(digits = 6): string {
+  const max = 10 ** digits;
+  const value = randomBytes(4).readUInt32BE(0) % max;
+  return value.toString().padStart(digits, '0');
+}

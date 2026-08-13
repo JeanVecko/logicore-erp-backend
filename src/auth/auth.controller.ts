@@ -12,7 +12,8 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
-import { AuthResponseDto } from './dto/auth-response.dto';
+import { VerifyLoginCodeDto } from './dto/verify-login-code.dto';
+import { AuthResponseDto, LoginChallengeDto } from './dto/auth-response.dto';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -30,10 +31,27 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Connexion par e-mail / mot de passe' })
+  @ApiOperation({ summary: "Connexion par e-mail / mot de passe — envoie un code de connexion par e-mail si SMTP est configuré, sinon connecte directement" })
   @ApiResponse({ status: 200, type: AuthResponseDto })
-  login(@Body() dto: LoginDto, @Req() req: Request): Promise<AuthResponseDto> {
+  login(@Body() dto: LoginDto, @Req() req: Request): Promise<AuthResponseDto | LoginChallengeDto> {
     return this.authService.login(dto, req.headers['user-agent'], req.ip);
+  }
+
+  @Public()
+  @Post('login/verify-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Vérifie le code de connexion reçu par e-mail et émet la session (étape 2/2)' })
+  @ApiResponse({ status: 200, type: AuthResponseDto })
+  verifyLoginCode(@Body() dto: VerifyLoginCodeDto, @Req() req: Request): Promise<AuthResponseDto> {
+    return this.authService.verifyLoginCode(dto.email, dto.code, req.headers['user-agent'], req.ip);
+  }
+
+  @Public()
+  @Post('login/resend-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Renvoie un nouveau code de connexion par e-mail' })
+  resendLoginCode(@Body() dto: ForgotPasswordDto): Promise<{ message: string }> {
+    return this.authService.resendLoginCode(dto.email);
   }
 
   @Public()

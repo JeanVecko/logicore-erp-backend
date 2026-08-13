@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { generateToken, hashToken } from '../common/utils/token.util';
+import { generateToken, generateNumericCode, hashToken } from '../common/utils/token.util';
 
 @Injectable()
 export class TokensService {
@@ -99,6 +99,34 @@ export class TokensService {
       throw new UnauthorizedException('Lien de vérification invalide ou expiré');
     }
     await this.prisma.emailVerificationToken.update({ where: { id: record.id }, data: { used: true } });
+    return record;
+  }
+
+  // ── Code de connexion (2e facteur envoyé par e-mail) ────────────────────
+  async createLoginVerificationCode(userId: string): Promise<string> {
+    const raw = generateNumericCode(6);
+    const codeHash = hashToken(raw);
+    const minutes = this.config.get<number>('tokens.loginCodeExpiresInMinutes') as number;
+    const expiresAt = new Date(Date.now() + minutes * 60_000);
+
+    // Un code précédent non utilisé ne doit plus être valide une fois qu'un nouveau est demandé
+    // (renvoi, ou nouvelle tentative de connexion) — évite d'avoir plusieurs codes valides à la fois.
+    await this.prisma.loginVerificationCode.updateMany({ where: { userId, used: false }, data: { used: true } });
+    await this.prisma.loginVerificationCode.create({ data: { userId, codeHash, expiresAt } });
+    return raw;
+  }
+
+  async consumeLoginVerificationCode(userId: string, rawCode: string) {
+    const codeHash = hashToken(rawCode);
+    const record = await this.prisma.loginVerificationCode.findFirst({
+      where: { userId, codeHash, used: false },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!record || record.expiresAt < new Date()) {
+      throw new UnauthorizedException('Code de connexion invalide ou expiré');
+    }
+    await this.prisma.loginVerificationCode.update({ where: { id: record.id }, data: { used: true } });
     return record;
   }
 

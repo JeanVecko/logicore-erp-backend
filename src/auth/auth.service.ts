@@ -4,11 +4,12 @@ import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { TokensService } from './tokens.service';
+import { EmailService } from '../email/email.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ROLE_CODES } from '../common/constants/roles.constant';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { AuthResponseDto } from './dto/auth-response.dto';
+import { AuthResponseDto, LoginChallengeDto } from './dto/auth-response.dto';
 
 const userWithRoleInclude = Prisma.validator<Prisma.UserInclude>()({
   role: { include: { permissions: { include: { permission: true } } } },
@@ -22,6 +23,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly tokens: TokensService,
     private readonly config: ConfigService,
+    private readonly emailService: EmailService,
   ) {}
 
   /** Inscription self-service : crée l'entreprise (tenant) + son premier utilisateur Admin. */
@@ -50,6 +52,7 @@ export class AuthService {
           passwordHash,
           firstName: dto.firstName,
           lastName: dto.lastName,
+          phone: dto.phone,
         },
         include: userWithRoleInclude,
       });
@@ -61,7 +64,12 @@ export class AuthService {
     return this.buildAuthResponse(user);
   }
 
-  async login(dto: LoginDto, userAgent?: string, ipAddress?: string): Promise<AuthResponseDto> {
+  /** Étape 1/2 : vérifie e-mail + mot de passe, puis envoie un code de connexion à 6 chiffres par
+   * e-mail (aucun jeton émis ici) — voir verifyLoginCode() pour l'étape 2.
+   * Tant qu'aucun SMTP réel n'est configuré (voir EmailModule), ce code ne serait reçu par
+   * personne : on saute alors directement à la session, comme avant l'introduction du 2e facteur.
+   * Repasse automatiquement en mode "code par e-mail" dès que SMTP_HOST est renseigné. */
+  async login(dto: LoginDto, userAgent?: string, ipAddress?: string): Promise<AuthResponseDto | LoginChallengeDto> {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email }, include: userWithRoleInclude });
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Identifiants invalides');
@@ -72,8 +80,53 @@ export class AuthService {
       throw new UnauthorizedException('Identifiants invalides');
     }
 
+    if (!this.config.get<string>('email.smtpHost')) {
+      await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+      return this.buildAuthResponse(user, userAgent, ipAddress);
+    }
+
+    await this.sendLoginCode(user.id, user.email);
+    return {
+      requiresVerification: true,
+      email: user.email,
+      message: 'Un code de connexion a été envoyé par e-mail.',
+    };
+  }
+
+  /** Étape 2/2 : consomme le code reçu par e-mail et émet la session (access+refresh token). */
+  async verifyLoginCode(email: string, code: string, userAgent?: string, ipAddress?: string): Promise<AuthResponseDto> {
+    const user = await this.prisma.user.findUnique({ where: { email }, include: userWithRoleInclude });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Code de connexion invalide ou expiré');
+    }
+
+    await this.tokens.consumeLoginVerificationCode(user.id, code);
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     return this.buildAuthResponse(user, userAgent, ipAddress);
+  }
+
+  /** Renvoie un nouveau code de connexion — réponse générique (ne confirme pas si le compte existe). */
+  async resendLoginCode(email: string): Promise<{ message: string }> {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (user && user.isActive) {
+      await this.sendLoginCode(user.id, user.email);
+    }
+    return { message: 'Si ce compte existe, un nouveau code a été envoyé par e-mail.' };
+  }
+
+  private async sendLoginCode(userId: string, email: string): Promise<void> {
+    const code = await this.tokens.createLoginVerificationCode(userId);
+    const minutes = this.config.get<number>('tokens.loginCodeExpiresInMinutes');
+    // Un échec d'envoi ne doit pas bloquer silencieusement l'utilisateur : le code reste valide
+    // et consultable dans les logs serveur en environnement sans SMTP réel (provider simulé).
+    await this.emailService.send({
+      to: email,
+      subject: 'Votre code de connexion — SNADARPE ERP',
+      text:
+        `Votre code de connexion est : ${code}\n\n` +
+        `Ce code est valable ${minutes} minutes.\n\n` +
+        `Si vous n'êtes pas à l'origine de cette tentative de connexion, ignorez cet e-mail.`,
+    });
   }
 
   async refresh(rawRefreshToken: string, userAgent?: string, ipAddress?: string): Promise<AuthResponseDto> {
