@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: snadarpe-erp-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npx prisma db seed && npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_PREFIX
+        value: api/v1
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      - key: PASSWORD_RESET_EXPIRES_IN_MINUTES
+        value: "30"
+      - key: EMAIL_VERIFICATION_EXPIRES_IN_HOURS
+        value: "24"
+      - key: LOGIN_CODE_EXPIRES_IN_MINUTES
+        value: "10"
+      - key: BCRYPT_SALT_ROUNDS
+        value: "12"
+      - key: CORS_ORIGIN
+        sync: false
+      - key: THROTTLE_TTL
+        value: "60"
+      - key: THROTTLE_LIMIT
+        value: "100"
+      - key: SEED_COMPANY_NAME
+        value: SNADARPE SA
+      - key: SEED_SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SEED_SUPER_ADMIN_PASSWORD
+        sync: false
