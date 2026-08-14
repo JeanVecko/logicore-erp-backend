@@ -63,100 +63,6 @@ async function seedRolesAndPermissions() {
   console.log(`✅ ${DEFAULT_ROLES.length} rôles seedés avec leurs permissions`);
 }
 
-const DEFAULT_CATEGORIES = [
-  { name: 'Matériaux', code: 'MAT' },
-  { name: 'Électricité', code: 'ELE' },
-  { name: 'Plomberie', code: 'PLO' },
-  { name: 'Peinture', code: 'PEI' },
-  { name: 'Quincaillerie', code: 'QUI' },
-];
-
-async function seedDefaultCategories(companyId: string) {
-  for (const { name, code } of DEFAULT_CATEGORIES) {
-    await prisma.category.upsert({
-      where: { companyId_name: { companyId, name } },
-      update: {},
-      create: { companyId, name, code },
-    });
-  }
-  console.log(`✅ ${DEFAULT_CATEGORIES.length} catégories par défaut prêtes`);
-}
-
-const DEFAULT_PRODUCTS = [
-  { sku: 'CIM-0042', name: 'Ciment CPJ 45 — sac 50kg', category: 'Matériaux', unit: 'sac', purchasePrice: 8500, sellingPrice: 9500, reorderPoint: 50, initialStock: 8 },
-  { sku: 'FER-0117', name: 'Fer à béton Ø12mm — barre 12m', category: 'Matériaux', unit: 'barre', purchasePrice: 125000, sellingPrice: 138000, reorderPoint: 40, initialStock: 34 },
-  { sku: 'PEI-0089', name: 'Peinture acrylique blanche 20L', category: 'Peinture', unit: 'bidon', purchasePrice: 65000, sellingPrice: 72000, reorderPoint: 20, initialStock: 3 },
-  { sku: 'TUB-0203', name: 'Tube PVC Ø100 — longueur 3m', category: 'Plomberie', unit: 'tube', purchasePrice: 20000, sellingPrice: 23000, reorderPoint: 70, initialStock: 61 },
-  { sku: 'CAB-0056', name: 'Câble électrique souple 2.5mm²', category: 'Électricité', unit: 'rouleau', purchasePrice: 75000, sellingPrice: 84000, reorderPoint: 30, initialStock: 5 },
-  { sku: 'VIS-0312', name: 'Vis à bois inox 4x40mm — boîte 200', category: 'Quincaillerie', unit: 'boîte', purchasePrice: 5000, sellingPrice: 5800, reorderPoint: 60, initialStock: 142 },
-  { sku: 'DIS-0071', name: 'Disjoncteur différentiel 30mA', category: 'Électricité', unit: 'pièce', purchasePrice: 35000, sellingPrice: 39500, reorderPoint: 15, initialStock: 27 },
-  { sku: 'ROB-0144', name: 'Robinet mitigeur cuisine chromé', category: 'Plomberie', unit: 'pièce', purchasePrice: 30000, sellingPrice: 34000, reorderPoint: 12, initialStock: 19 },
-];
-
-async function seedDefaultProducts(companyId: string) {
-  const categories = await prisma.category.findMany({ where: { companyId } });
-  const categoryIdByName = new Map(categories.map((c) => [c.name, c.id]));
-
-  for (const product of DEFAULT_PRODUCTS) {
-    const categoryId = categoryIdByName.get(product.category);
-    if (!categoryId) continue;
-
-    await prisma.product.upsert({
-      where: { companyId_sku: { companyId, sku: product.sku } },
-      update: {},
-      create: {
-        companyId,
-        categoryId,
-        sku: product.sku,
-        name: product.name,
-        unit: product.unit,
-        purchasePrice: product.purchasePrice,
-        sellingPrice: product.sellingPrice,
-        reorderPoint: product.reorderPoint,
-      },
-    });
-  }
-  console.log(`✅ ${DEFAULT_PRODUCTS.length} articles de démonstration prêts`);
-}
-
-async function seedInitialInventory(companyId: string) {
-  const warehouse = await prisma.warehouse.findUniqueOrThrow({
-    where: { companyId_code: { companyId, code: 'DEP-CTR' } },
-  });
-  const products = await prisma.product.findMany({ where: { companyId } });
-  const productBySku = new Map(products.map((p) => [p.sku, p]));
-
-  let created = 0;
-  for (const item of DEFAULT_PRODUCTS) {
-    const product = productBySku.get(item.sku);
-    if (!product) continue;
-
-    const existingInventory = await prisma.inventory.findUnique({
-      where: { productId_warehouseId: { productId: product.id, warehouseId: warehouse.id } },
-    });
-    if (existingInventory) continue; // déjà initialisé, on ne rejoue pas le mouvement
-
-    await prisma.$transaction([
-      prisma.inventory.create({
-        data: { companyId, productId: product.id, warehouseId: warehouse.id, quantity: item.initialStock },
-      }),
-      prisma.stockMovement.create({
-        data: {
-          companyId,
-          productId: product.id,
-          warehouseId: warehouse.id,
-          type: 'ENTRY',
-          quantity: item.initialStock,
-          reference: 'STOCK-INITIAL',
-          notes: 'Stock initial saisi lors de la mise en place',
-        },
-      }),
-    ]);
-    created += 1;
-  }
-  console.log(`✅ Stock initial posé pour ${created} article(s) (via mouvements ENTRY réels)`);
-}
-
 async function seedDefaultCompanyAndSuperAdmin(): Promise<string> {
   const companyName = process.env.SEED_COMPANY_NAME ?? 'LogiCore SA';
   const superAdminEmail = process.env.SEED_SUPER_ADMIN_EMAIL ?? 'superadmin@logicore.local';
@@ -172,14 +78,6 @@ async function seedDefaultCompanyAndSuperAdmin(): Promise<string> {
     console.log(`ℹ️  Entreprise par défaut déjà existante : ${company.name}`);
   }
 
-  const warehouseCode = 'DEP-CTR';
-  const warehouse = await prisma.warehouse.upsert({
-    where: { companyId_code: { companyId: company.id, code: warehouseCode } },
-    update: {},
-    create: { companyId: company.id, name: 'Dépôt Central', code: warehouseCode },
-  });
-  console.log(`✅ Entrepôt par défaut prêt : ${warehouse.name}`);
-
   const superAdminRole = await prisma.role.findUniqueOrThrow({ where: { code: ROLE_CODES.SUPER_ADMIN } });
 
   const existingUser = await prisma.user.findUnique({ where: { email: superAdminEmail } });
@@ -192,7 +90,6 @@ async function seedDefaultCompanyAndSuperAdmin(): Promise<string> {
   const superAdmin = await prisma.user.create({
     data: {
       companyId: company.id,
-      warehouseId: warehouse.id,
       roleId: superAdminRole.id,
       email: superAdminEmail,
       passwordHash,
@@ -207,15 +104,60 @@ async function seedDefaultCompanyAndSuperAdmin(): Promise<string> {
   return company.id;
 }
 
+// Identifiants du catalogue/entrepôt de démonstration posés par une ancienne version de ce seed —
+// supprimés ici pour laisser l'entreprise vide, prête à recevoir de vrais articles. Sans effet une
+// fois ce nettoyage passé une première fois (plus rien à trouver), donc sûr de laisser en place.
+const DEMO_CATEGORY_CODES = ['MAT', 'ELE', 'PLO', 'PEI', 'QUI'];
+const DEMO_PRODUCT_SKUS = ['CIM-0042', 'FER-0117', 'PEI-0089', 'TUB-0203', 'CAB-0056', 'VIS-0312', 'DIS-0071', 'ROB-0144'];
+const DEMO_WAREHOUSE_CODE = 'DEP-CTR';
+
+async function cleanupDemoCatalog(companyId: string) {
+  const demoProducts = await prisma.product.findMany({ where: { companyId, sku: { in: DEMO_PRODUCT_SKUS } } });
+  const productIds = demoProducts.map((p) => p.id);
+
+  if (productIds.length > 0) {
+    await prisma.stockMovement.deleteMany({ where: { companyId, productId: { in: productIds } } });
+    await prisma.inventory.deleteMany({ where: { companyId, productId: { in: productIds } } });
+    await prisma.product.deleteMany({ where: { id: { in: productIds } } });
+    console.log(`🧹 ${productIds.length} article(s) de démonstration supprimé(s)`);
+  }
+
+  const demoCategories = await prisma.category.findMany({ where: { companyId, code: { in: DEMO_CATEGORY_CODES } } });
+  let removedCategories = 0;
+  for (const category of demoCategories) {
+    const remaining = await prisma.product.count({ where: { categoryId: category.id } });
+    if (remaining === 0) {
+      await prisma.category.delete({ where: { id: category.id } });
+      removedCategories += 1;
+    }
+  }
+  if (removedCategories > 0) console.log(`🧹 ${removedCategories} catégorie(s) de démonstration supprimée(s)`);
+
+  const warehouse = await prisma.warehouse.findUnique({ where: { companyId_code: { companyId, code: DEMO_WAREHOUSE_CODE } } });
+  if (warehouse) {
+    const [movements, inventory] = await Promise.all([
+      prisma.stockMovement.count({ where: { OR: [{ warehouseId: warehouse.id }, { targetWarehouseId: warehouse.id }] } }),
+      prisma.inventory.count({ where: { warehouseId: warehouse.id } }),
+    ]);
+    if (movements === 0 && inventory === 0) {
+      // Détache les utilisateurs éventuellement rattachés à ce dépôt avant de le supprimer
+      // (champ optionnel — on les laisse simplement sans dépôt par défaut).
+      await prisma.user.updateMany({ where: { warehouseId: warehouse.id }, data: { warehouseId: null } });
+      await prisma.warehouse.delete({ where: { id: warehouse.id } });
+      console.log(`🧹 Entrepôt de démonstration "${warehouse.name}" supprimé`);
+    } else {
+      console.log(`ℹ️  Entrepôt "${warehouse.name}" conservé (encore référencé par de vraies données)`);
+    }
+  }
+}
+
 async function main() {
-  console.log('🌱 Démarrage du seed LogiCore ERP...\n');
+  console.log('🌱 Démarrage du seed SNADARPE ERP...\n');
   await seedCurrencies();
   await seedPermissions();
   await seedRolesAndPermissions();
   const companyId = await seedDefaultCompanyAndSuperAdmin();
-  await seedDefaultCategories(companyId);
-  await seedDefaultProducts(companyId);
-  await seedInitialInventory(companyId);
+  await cleanupDemoCatalog(companyId);
   console.log('\n🌱 Seed terminé avec succès.');
 }
 
