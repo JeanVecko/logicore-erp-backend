@@ -32,6 +32,7 @@ export interface AppConfig {
     model: string;
   };
   email: {
+    brevoApiKey?: string;
     smtpHost?: string;
     smtpPort: number;
     smtpSecure: boolean;
@@ -83,8 +84,10 @@ export default (): AppConfig => ({
     model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5',
   },
   email: {
-    // Optionnel : tant que smtpHost n'est pas renseigné, EmailModule utilise un provider simulé
-    // (loggue l'e-mail au lieu de l'envoyer) — même philosophie que le bloc `ai` ci-dessus.
+    // Ordre de priorité (voir email.module.ts) : Brevo (API HTTP) > SMTP > simulé.
+    // Brevo est privilégié en hébergement cloud (Render, etc.) car ces plateformes bloquent
+    // souvent le trafic SMTP sortant — une API HTTP classique n'a pas ce problème.
+    brevoApiKey: process.env.BREVO_API_KEY || undefined,
     smtpHost: process.env.SMTP_HOST || undefined,
     smtpPort: parseInt(process.env.SMTP_PORT ?? '587', 10),
     smtpSecure: process.env.SMTP_SECURE === 'true',
