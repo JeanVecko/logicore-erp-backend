@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -19,9 +19,10 @@ export class UsersController {
 
   @Get()
   @Permissions('users:read')
-  @ApiOperation({ summary: 'Liste les utilisateurs de mon entreprise' })
-  findAll(@Query() query: PaginationQueryDto, @CurrentUser() user: JwtPayload) {
-    return this.usersService.findAll(user.companyId, query);
+  @ApiOperation({ summary: "Liste les utilisateurs de mon entreprise (ou d'une entreprise ciblée via ?companyId=, Super Admin uniquement)" })
+  findAll(@Query() query: ListUsersQueryDto, @CurrentUser() user: JwtPayload) {
+    const targetCompanyId = user.roleCode === ROLE_CODES.SUPER_ADMIN && query.companyId ? query.companyId : user.companyId;
+    return this.usersService.findAll(targetCompanyId, query);
   }
 
   @Post()
