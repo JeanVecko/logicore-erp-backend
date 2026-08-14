@@ -58,10 +58,25 @@ export class AuthService {
       });
     });
 
-    // TODO(email): brancher un provider d'envoi (SendGrid/SMTP) — le token est prêt.
-    await this.tokens.createEmailVerificationToken(user.id);
+    const verificationToken = await this.tokens.createEmailVerificationToken(user.id);
+    await this.sendWelcomeEmail(user.email, dto.companyName, verificationToken);
 
     return this.buildAuthResponse(user);
+  }
+
+  /** E-mail de bienvenue avec lien d'activation — un échec d'envoi ne doit pas faire échouer
+   * l'inscription (le compte est déjà créé et utilisable ; l'utilisateur peut aussi redemander
+   * ce lien via resendVerificationEmail()). */
+  private async sendWelcomeEmail(email: string, companyName: string, verificationToken: string): Promise<void> {
+    const activationUrl = `${this.config.get<string>('frontendUrl')}/verify-email?token=${verificationToken}`;
+    await this.emailService.send({
+      to: email,
+      subject: `Félicitations pour votre inscription sur SNADARPE ERP !`,
+      text:
+        `Félicitations, votre compte administrateur pour "${companyName}" a été créé avec succès sur SNADARPE ERP !\n\n` +
+        `Veuillez cliquer sur le lien ci-dessous pour activer votre compte :\n${activationUrl}\n\n` +
+        `Si vous n'êtes pas à l'origine de cette inscription, ignorez cet e-mail.`,
+    });
   }
 
   /** Étape 1/2 : vérifie e-mail + mot de passe, puis envoie un code de connexion à 6 chiffres par
