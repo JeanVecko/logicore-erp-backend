@@ -95,7 +95,8 @@ export class AuthService {
       throw new UnauthorizedException('Identifiants invalides');
     }
 
-    if (!this.config.get<string>('email.smtpHost')) {
+    const emailConfigured = Boolean(this.config.get<string>('email.brevoApiKey') || this.config.get<string>('email.smtpHost'));
+    if (!emailConfigured) {
       await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
       return this.buildAuthResponse(user, userAgent, ipAddress);
     }
